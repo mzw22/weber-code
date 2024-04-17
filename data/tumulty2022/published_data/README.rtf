@@ -1,0 +1,87 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2639
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fswiss\fcharset0 Helvetica;}
+{\colortbl;\red255\green255\blue255;}
+{\*\expandedcolortbl;;}
+\margl1440\margr1440\vieww16600\viewh9700\viewkind0
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+
+\f0\fs24 \cf0 README for data files and R code associated with the paper:\
+\
+JP Tumulty, CA Fouilloux, J Goyes Vallejos, MA Bee. Predicting and measuring decision rules for social recognition in a Neotropical frog. The American Naturalist.\
+\
+Summary: This dataset includes acoustic properties of advertisement calls recorded from golden rocket frogs (Anomaloglossus beebei), which are analyzed to describe within- and between-individual variation. These measures of variation are used to parameterize a signal detection theory model of the optimal thresholds for discriminating between individuals based on calls. The dataset also includes aggressive responses of golden rocket frogs to a field playback experiment based on the habituation-discrimination paradigm. This playback experiment was used to empirically estimate thresholds for discriminating between territory neighbors and strangers. Finally, the measures of individual variation and the empirically determined thresholds are used in a signal detection theory model to explore the combinations of other parameters that could have resulted in the observed thresholds. \
+\
+The data for this paper was collected by JP Tumulty, CA Fouilloux, and J Goyes. The data analysis was performed by JP Tumulty. \
+\
+Analysis was performed in R version 4.0.5.\
+\
+\
+R script files:\
+\
+\'93beebei_Threshold_Predictions.R\'94 is the R script used to analyze within- and among-individual variation in calls and make predictions of optimal discrimination thresholds. \
+\
+\'93Habituation_discrimination_analysis.R\'94 is the R script used to analyze aggressive responses to playback experiments. \
+\
+\'93beebei_SDT_Model.R\'94 is the R script used to model parameter space of the signal detection theory model. \
+\
+\
+Data files:\
+\
+\'93Audio_file_FZ_sound_codes.csv\'94 includes sound codes for audio files archived at FonoZoo. This information is also provided in Table S-5.\
+\
+Columns:\
+-AUDIO_FILE: Name of acoustic recording. Each file name contains meta-data separated by an underscore. These data are, in order: recording file name, species, individual ID, date (month.day.year), temperature in degrees Celcius.\
+FZ_SOUND_CODE: Unique identifier for each recording in FonoZoo\'92s database. \
+\
+\
+\'93beebei_call_properties.csv\'94 includes acoustic property measurements from advertisement calls. \
+\
+Columns:\
+-ID: Unique identifier for each individual\
+-Recording: Unique identifier for each acoustic recording\
+-Temp: Air temperature in degrees Celsius at which recordings were made\
+-Call: Unique identifier for each call per individual\
+-Call_Duration: Duration of the call from onset of the first pulse to offset of the last pulse, measured in seconds\
+-Call_Interval: Time in between the offset of one call and the onset of the subsequent call, measured in seconds\
+-Call_Period: Time from the onset of a call to the onset of the subsequent call, measured in seconds\
+-Num_Pulses: Number of pulses in a call\
+\
+The remaining columns are measurements of acoustic properties for each pulse in a call measured separately. The pulse is designated before the property as, e.g., \'93Pulse1_\'94 followed by the property. \'93NA\'94 was entered for columns relating to pulses that were not present in a particular call (calls had varying number of pulses). The measured properties are:\
+\
+-PulseX_Duration: Time from the onset to the offset of a single pulse, measured in seconds\
+-PulseX_Rise: Time from the onset of a pulse to the maximum amplitude of that pulse, measured in seconds\
+-PulseX_Fall: Time from the maximum amplitude of a pulse to the offset of that pulse, measured in seconds\
+-PulseX_Interval: Time from the offset of a pulse to the onset of the subsequent pulse, measured in seconds\
+-PulseX_Period: Time from the onset of a pulse to the onset of the subsequent pulse, measured in seconds\
+-PulseX_Max_Freq: Dominant frequency of a pulse measured as the frequency with maximum power, measured in Hz\
+\
+\
+\
+\'93Habituation_discrimination_data_byBlock.csv\'94 are measures of aggression in response to acoustic playback experiments, summarized by block, which are of 3 consecutive 4-minute stimulus periods\
+\
+Columns\
+-File: Unique identifier for each test\
+-ID: Unique identifier for each subject\
+-Treatment: Treatment group, specifying the percentage change in pulse temporal properties to the habituation stimulus that was broadcast to the subject during the discrimination phase. Controls experienced the same stimulus during the habituation and discrimination phase (i.e., 0%).\
+-Treatment_dir: Direction of change to the habituation stimulus for each treatment group. Up = increase duration, Down = decrease in duration. \
+-Phase: The phase of the test: Habituation or Discrimination\
+-Block: Group of three stimulus periods during for which aggressive responses were summarized. First_H = first block of the habituation phase, Last_H = last block of the habituation phase, Discrimination = block of the discrimination phase\
+-Agg_Calls: Number of aggressive calls\
+-Pseudo_Agg_Calls: Number of pseudo-aggressive calls\
+-Approach: Net displacement towards the speaker, measured in meters\
+-Prop_Dist: Closest position to the speaker, expressed as the inverse of the proportion of the distance between the subject and the speaker at its location of closest approach and the distance between the subject and the speaker at the start of the test, measured in meters\
+\
+\
+\'93Habituation_discrimination_data_byPeriod.csv\'94 includes measures of aggression in response to acoustic playback experiments, summarized by stimulus period, which consists of 2 minutes of repetition of the stimulus followed by 2 minutes of silence. \
+\
+Columns\
+-File: Unique identifier for each test\
+-ID: Unique identifier for each subject\
+-Treatment: Treatment group, specifying the percentage change in pulse temporal properties to the habituation stimulus that was broadcast to the subject during the discrimination phase. Controls experienced the same stimulus during the habituation and discrimination phase (i.e., 0%).\
+-Treatment_dir: Direction of change to the habituation stimulus for each treatment group. Up = increase duration, Down = decrease in duration. \
+-Phase: The phase of the test: Habituation or Discrimination\
+-Agg_Calls: Number of aggressive calls\
+-Pseudo_Agg_Calls: Number of pseudo-aggressive calls\
+-Approach: Net displacement towards the speaker, measured in meters\
+-Prop_Dist: Closest position to the speaker, expressed as the inverse of the proportion of the distance between the subject and the speaker at its location of closest approach and the distance between the subject and the speaker at the start of the test, measured in meters\
+}
