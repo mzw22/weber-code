@@ -1,0 +1,2 @@
+"k_estimate","k_lower_95","k_upper_95","AIC_k","AIC_k_95","AIC_0","AIC_1","Estimate","Std. Error","z value","Pr(>|z|)","R2","model","filename","n_pairs"
+-0.1565,-0.1931,-0.1195,2407.4085,2409.4085,2442.2167,3689.2727,0.085909438240909,0.00116983910983805,73.4369688262532,0,1,"binomial","nachev2013_bumblebees",11
