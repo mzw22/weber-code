@@ -1,0 +1,2 @@
+"k_estimate","k_lower_95","k_upper_95","AIC_k","AIC_k_95","AIC_0","AIC_1","Estimate","Std. Error","z value","Pr(>|z|)","R2","model","filename","n_pairs"
+0.2168,0.1722,0.2612,704.9037,706.9037,749.2979,1224.5062,0.629197074996564,0.0155721902043761,40.4051752989601,0,1,"binomial","romo2004",17
