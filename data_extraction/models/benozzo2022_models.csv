@@ -1,2 +1,0 @@
-"k_estimate","k_lower_95","k_upper_95","AIC_k","AIC_k_95","AIC_0","AIC_1","Estimate","Std. Error","z value","Pr(>|z|)","R2","model","filename","n_pairs"
-0.4031,0.3709,0.4353,6746.5765,6748.5765,7035.167,7421.7688,0.270321056587785,0.00388031217329736,69.6647703883256,0,1,"binomial","benozzo2022",15
