@@ -1,0 +1,807 @@
+---
+title: "Swordtail Body Size Analysis"
+author: "Eleanor Caves"
+date: "11/10/2022"
+output: html_document
+---
+##To run this code, four data files are required:
+##1) Gray_versus_stim_trials.csv: this file contains results from preliminary trials testing whether females spent more time with our courting animated stimulus than a plain gray background
+##2) Female_swordtail_sexual_responsiveness.csv: this file contains results from preliminary trials in which we monitored females in the visual (but not physical) presence of males prior to running trials, to confirm that they exhibited behaviors that indicated they were sexually receptive
+##3) Body_size_two_choice_data.csv: this file contains data for all of the experimental trials in which females were given a choice between males of two different body sizes, and in which time spent with each male is taken as a proxy for preference
+##4) Absolute_versus_proportional_correlation.csv: this file contains data necessary to test how correlated absolute and proportional difference are with one another
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ape)
+library(Rmisc)
+library(cowplot)
+library(lme4)
+library(effects)
+library(car)
+library(qpcR)
+library(ggpubr)
+library(grid)
+```
+
+1) In preliminary trials, females spent significantly more time with a courting stimulus than a plain gray stimulus
+```{r}
+courting.gray.data<-read.csv("Gray_versus_stim_trials.csv", header=TRUE, stringsAsFactors = TRUE)
+
+##calculate proportion of time spent with each male
+courting.gray.data$prop_courting<-courting.gray.data$Time_Courting/(courting.gray.data$Time_Courting + courting.gray.data$Time_Gray)
+courting.gray.data$prop_gray<-courting.gray.data$Time_Gray/(courting.gray.data$Time_Courting + courting.gray.data$Time_Gray)
+
+##then mean proportion for each fish across trials
+courting.gray.data.grouped<-courting.gray.data%>%group_by(Fish_ID)%>%dplyr::summarise(courting=mean(prop_courting), gray=mean(prop_gray))
+as.data.frame(courting.gray.data.grouped)
+mean(courting.gray.data.grouped$courting)
+sd(courting.gray.data.grouped$courting)
+mean(courting.gray.data.grouped$gray)
+sd(courting.gray.data.grouped$gray)
+
+colnames(courting.gray.data.grouped)<-c("Fish_ID", "Courting Male", "Plain Gray Slide")
+courting_v_gray_data_plot<-courting.gray.data.grouped %>%
+  pivot_longer(!Fish_ID, names_to = "Stimulus", values_to = "Proportion")
+
+png(file="Preliminary_Data_Figure_courting_v_gray.png", width=4, height=4, units="in", res=600)
+ggplot(data=courting_v_gray_data_plot, aes(x=Stimulus, y=Proportion))+
+  geom_boxplot()+
+  geom_jitter(shape=16, position=position_jitter(0.01))+
+    stat_summary(fun=mean, geom="point", shape=23, size=4, fill="gray")+
+  ylab("Proportion of Trial")+
+  theme_bw()
+dev.off()
+
+##Test whether they spent a significantly greater proportion of time with courting versus gray stimuli
+##First, separate out the courting male data
+courting.male.data<-courting_v_gray_data_plot%>%filter(Stimulus=="Courting Male")
+##Now test if the proportion of time spent with courting male differs from 0.5 in a one-sided test
+##use a one-sided test on the proportion data for one treatment (courting male), comparing it to a mu=0.5
+t.test(courting.male.data$Proportion, mu=0.5, alternative="greater")#p=0.0002; thus, accept the alternative
+##hypothesis, which is that the proportion of time spent with courting males was greater
+
+```
+
+
+Females were sexually receptive prior to trials, in that prior to all but 3 out of 61 preliminary trials, females exhibited at least one, but often two and sometimes three, behaviors indicative of sexual receptiveness.
+```{r}
+sexual.receptiveness<-read.csv("Female_swordtail_sexual_responsiveness.csv", header=TRUE, stringsAsFactors = TRUE)
+
+mean(sexual.receptiveness$Number_of_Behaviors)
+sd(sexual.receptiveness$Number_of_Behaviors)
+
+behaviors<-sexual.receptiveness$Number_of_Behaviors
+h<-hist(behaviors, breaks=5, main="", xlab="Number of Behaviors", ylim=c(0,35))
+text(h$mids,h$counts,labels=h$counts, adj=c(0.5, -0.5))
+```
+
+Clean and summarize the data
+1) Remove trials that didn't leave the center compartment during the trial
+2) If a fish didn't visit a given compartment during a trial, latency to visit the trial should be 180 seconds
+```{r load in dataset, echo=FALSE}
+data<-read.csv("Body_size_two_choice_data.csv", header=TRUE, stringsAsFactors = TRUE)
+#head(data)
+
+#Give the comparisons levels so they appear in a logical order based on absolute and relative difference between stimuli in figures
+data$Comparison <- factor(data$Comparison, levels = c("120v70", "110v70", "120v85", "104v70", "120v92", "97v70", "120v100", "92v70", "120v104", "85v70", "120v110"))
+
+##Identify which fish didn't visit any sections other than the center
+nochoice.fish<-data%>%dplyr::group_by(Fish_ID, Date)%>%filter((Time_with_Stim[1]==0 & Time_with_Stim[2]==0))
+##Delete the nochoice fish from the dataset for analysis
+data<-data%>%dplyr::group_by(Fish_ID, Date)%>%filter(!(Time_with_Stim[1]==0 & Time_with_Stim[2]==0))
+
+##Number of fish involved in each comparison in the dataset
+data%>%dplyr::group_by(Comparison)%>%dplyr::summarise(count = n_distinct(Fish_ID))
+
+##How many total trials were excluded from analysis AFTER re-running them?
+count.data<-data%>%dplyr::ungroup(Date)%>%dplyr::count(Fish_ID, Comparison)
+count.data<-count.data%>%filter(n==2)
+
+##If duration = 0 AND visits = 0, this means a fish didn't go to a given section at any point in a trial, so replace Latency with 180 (meaning the latency to visit was the entire length of the 3-minute, or 180-second, trial)
+data$Latency_to_Visit<-ifelse(data$Time_with_Stim == 0 & data$Visits_to_Stim ==0, 180, data$Latency_to_Visit)
+
+##How many trials in which a fish visited one of the stimuli zero times, but the other only 1 time?
+##across the two trials in which a fish saw a given pair:
+across.all.trials<-data%>%group_by(Fish_ID, Comparison)%>%mutate(sum_visits=Visits_to_Stim[1]+Visits_to_Stim[2]+Visits_to_Stim[3]+Visits_to_Stim[4])
+
+##If treating the two trials separately:
+across.each.trial<-data%>%group_by(Fish_ID, Date)%>%mutate(sum_visits=(Visits_to_Stim[1]+Visits_to_Stim[2]))
+
+across.each.trial<-across.each.trial%>%filter(sum_visits==1)
+
+across.each.trial<-across.each.trial%>%filter(!Latency_to_Visit==180)
+
+across.each.trial%>%summarise(mean.latency=mean(Latency_to_Visit))
+
+across.each.trial%>%group_by(Fish_ID)%>%dplyr::count(Comparison)
+
+```
+
+For each fish, calculate proportion of time with each stimulus over both trials
+```{r, message=FALSE}
+data<-data%>%dplyr::group_by(Fish_ID, Date, Area_large, Area_small)%>%dplyr::mutate(prop_time=Time_with_Stim/(Time_with_Stim[1]+Time_with_Stim[2]))
+
+data<-data%>%dplyr::group_by(Fish_ID, Date, Area_large, Area_small)%>%dplyr::mutate(total_time=Time_with_Stim[1]+Time_with_Stim[2])
+
+data$Stimulus_Side<-as.factor(data$Stimulus_Side)
+data$Stimulus<-as.factor(data$Stimulus)
+
+sum.data<-data%>%dplyr::group_by(Fish_ID, Stimulus, Comparison,Comp_Num, total_time)%>%dplyr::summarise(mean_time_with_stim=mean(Time_with_Stim), mean_prop_with_stim=mean(prop_time)%>%replace(is.na(.), 0))
+```
+
+Generate the values for Table S1
+```{r}
+time.effect.sizes.table<-sum.data%>%dplyr::ungroup(Fish_ID)%>%dplyr::group_by(Comparison, Stimulus)%>%dplyr::summarize(Mean_Seconds=mean(mean_time_with_stim), SD_seconds=sd(mean_time_with_stim),
+                            Mean_Proportion=mean(mean_prop_with_stim), SD_Proportion=sd(mean_prop_with_stim))
+
+time.effect.sizes.table
+```
+
+Format the data for analyses, for which we need the data about each comparison in a single row
+```{r}
+##Separate the data for the low and high magnitude stimuli in each comparison
+data.by.stim<-data%>%ungroup(Fish_ID, Date)%>%dplyr::group_by(Fish_ID, Comparison, Comp_Num, Stimulus)%>%dplyr::summarise(mean_time_with_stim=mean(Time_with_Stim), total_visits=sum(Visits_to_Stim), mean_latency=mean(Latency_to_Visit), total_time_with_stim=sum(Time_with_Stim))
+##Slice 1 gives the data for the lower magnitude stimulus in each pair
+low.mag<-data.by.stim%>%slice(1)
+##Slice 2 gives the data for the higher magnitude stimulus in each pair
+high.mag<-data.by.stim%>%slice(2)
+
+##Join the high and low mag datasets back together by Fish_ID and Comparison
+prop.data<-left_join(low.mag, high.mag, by=c("Fish_ID", "Comparison", "Comp_Num"))
+colnames(prop.data)<-c("Fish_ID", "Comparison", "Comp_Num", "LowMagStim", "LowMag.time", "LowMag.visits", "LowMag.latency", "LowMag.totaltime", "HighMagStim", "HighMag.time", "HighMag.visits", "HighMag.latency", "HighMag.totaltime")
+
+##Now enter the magnitude of the stimuli
+prop.data$High_Mag<-NA
+prop.data$Low_Mag<-NA
+prop.data$High_Mag[prop.data$Comparison=="120v70"]<-1054
+prop.data$Low_Mag[prop.data$Comparison=="120v70"]<-363
+prop.data$High_Mag[prop.data$Comparison=="120v100"]<-1054
+prop.data$Low_Mag[prop.data$Comparison=="120v100"]<-721
+prop.data$High_Mag[prop.data$Comparison=="97v70"]<-692
+prop.data$Low_Mag[prop.data$Comparison=="97v70"]<-363
+prop.data$High_Mag[prop.data$Comparison=="120v110"]<-1054
+prop.data$Low_Mag[prop.data$Comparison=="120v110"]<-885
+prop.data$High_Mag[prop.data$Comparison=="85v70"]<-533
+prop.data$Low_Mag[prop.data$Comparison=="85v70"]<-363
+prop.data$High_Mag[prop.data$Comparison=="120v85"]<-1054
+prop.data$Low_Mag[prop.data$Comparison=="120v85"]<-533
+prop.data$High_Mag[prop.data$Comparison=="110v70"]<-885
+prop.data$Low_Mag[prop.data$Comparison=="110v70"]<-363
+prop.data$High_Mag[prop.data$Comparison=="120v104"]<-1054
+prop.data$Low_Mag[prop.data$Comparison=="120v104"]<-792
+prop.data$High_Mag[prop.data$Comparison=="92v70"]<-622
+prop.data$Low_Mag[prop.data$Comparison=="92v70"]<-363
+prop.data$High_Mag[prop.data$Comparison=="104v70"]<-792
+prop.data$Low_Mag[prop.data$Comparison=="104v70"]<-363
+prop.data$High_Mag[prop.data$Comparison=="120v92"]<-1054
+prop.data$Low_Mag[prop.data$Comparison=="120v92"]<-622
+
+##Calculate the relative and absolute difference between stimulus magnitudes for each comparison, as well as the mean size, and the total difference in time spent with high and low mag stim in each comparison
+prop.data$rel.diff<-abs(prop.data$High_Mag-prop.data$Low_Mag)/prop.data$High_Mag
+prop.data$abs.diff<-prop.data$High_Mag-prop.data$Low_Mag
+prop.data$mean.size<-(prop.data$High_Mag+prop.data$Low_Mag)/2
+prop.data$total.time.diff<-prop.data$HighMag.totaltime-prop.data$LowMag.totaltime
+
+##Identify each pair of stimuli as the "high" or "low" magnitude version of a given absolute difference; note that 120v70 is the two stimuli at the endpoints/extremes, and thus isn't paired with another stimulus pair, so we call it "endpoint"
+prop.data$pair.identity<-NA
+prop.data$pair.identity[prop.data$Comparison=="120v70"]<-"endpoint"
+prop.data$pair.identity[prop.data$Comparison=="120v100"]<-"high"
+prop.data$pair.identity[prop.data$Comparison=="97v70"]<-"low"
+prop.data$pair.identity[prop.data$Comparison=="120v110"]<-"high"
+prop.data$pair.identity[prop.data$Comparison=="85v70"]<-"low"
+prop.data$pair.identity[prop.data$Comparison=="120v85"]<-"high"
+prop.data$pair.identity[prop.data$Comparison=="110v70"]<-"low"
+prop.data$pair.identity[prop.data$Comparison=="120v104"]<-"high"
+prop.data$pair.identity[prop.data$Comparison=="92v70"]<-"low"
+prop.data$pair.identity[prop.data$Comparison=="120v92"]<-"high"
+prop.data$pair.identity[prop.data$Comparison=="104v70"]<-"low"
+
+```
+
+Is preference (total.time.diff) correlated with comparison number?
+```{r}
+##Colored lines by individual
+ggplot(prop.data, aes(x=Comp_Num, y=total.time.diff, col=Fish_ID))+
+  geom_point()+
+  geom_smooth(method="lm", se=F, lwd=0.5)+
+  labs(y= "Preference for Larger Male", x = "Comparison Number")+
+  scale_x_continuous(n.breaks=11)
+
+##All individuals together
+ggplot(prop.data, aes(x=Comp_Num, y=total.time.diff))+
+  geom_point()+
+  geom_smooth(method="lm")+
+  labs(y= "Preference for Larger Male", x = "Comparison Number")+
+  scale_x_continuous(n.breaks=11)
+
+##Test correlation using a Pearson Correlation Coefficient
+corr<-cor.test(prop.data$Comp_Num, prop.data$total.time.diff, method="pearson")
+corr
+
+```
+
+
+How correlated are proportional and absolute difference? 
+```{r}
+corr.data<-read.csv("Absolute_versus_proportional_correlation.csv", header=TRUE)
+ggplot(corr.data, aes(x=abs.diff, y=rel.diff))+
+  geom_point()+
+  geom_smooth(method="lm")
+
+##Test correlation using a Pearson Correlation Coefficient
+shapiro.test(corr.data$rel.diff)
+shapiro.test(corr.data$abs.diff)
+
+corr<-cor.test(corr.data$rel.diff, corr.data$abs.diff, method="pearson")
+corr
+```
+
+
+STATISTICAL ANALYSES:
+1. Total time with high magnitude stimulus
+```{r}
+##Start with the full model, i.e. which has an interaction between relative and absolute difference
+int.mod.totalhighmagtime<-lmer(HighMag.totaltime ~ scale(abs.diff)*scale(rel.diff) + (1|Fish_ID), data=prop.data)
+summary(int.mod.totalhighmagtime)
+
+#Make diagnostic plots to visually check model fit
+resid.int.mod.totalhighmagtime<-resid(int.mod.totalhighmagtime)
+predict.int.mod.totalhighmagtime<-predict(int.mod.totalhighmagtime)
+par(mfrow=c(1,3))
+hist(resid.int.mod.totalhighmagtime)
+plot(resid.int.mod.totalhighmagtime~predict.int.mod.totalhighmagtime)
+qqnorm(resid.int.mod.totalhighmagtime)
+qqline(resid.int.mod.totalhighmagtime)
+
+##Test for significance of the interaction term
+drop1(int.mod.totalhighmagtime, scope=~., test="Chisq") ##the interaction term is not significant, but relative difference is. Some people would argue we should drop the interaction term and build an additive model, which is below:
+
+##additive model:
+add.mod.totalhighmagtime<-lmer(HighMag.totaltime ~ scale(abs.diff)+scale(rel.diff) + (1|Fish_ID), data=prop.data)
+summary(add.mod.totalhighmagtime)
+
+##Visually check model diagnostic plots
+resid.add.mod.totalhighmagtime<-resid(add.mod.totalhighmagtime)
+predict.add.mod.totalhighmagtime<-predict(add.mod.totalhighmagtime)
+par(mfrow=c(1,3))
+hist(resid.add.mod.totalhighmagtime)
+plot(resid.add.mod.totalhighmagtime~predict.add.mod.totalhighmagtime)
+qqnorm(resid.add.mod.totalhighmagtime)
+qqline(resid.add.mod.totalhighmagtime)
+
+##Calculate p-values for each term in the additive model:
+drop1(add.mod.totalhighmagtime, test="Chisq")#relative difference, but not absolute difference, is a significant predictor of time spent with high magnitude male
+
+###BUT, we know that absolute and relative difference are highly correlated, so we can run separate models for each and compare the model fits using AIC
+mod.rel<-lmer(HighMag.totaltime ~ scale(rel.diff) + (1|Fish_ID), data=prop.data)
+mod.abs<-lmer(HighMag.totaltime ~ scale(abs.diff) + (1|Fish_ID), data=prop.data)
+mod.mean<-lmer(HighMag.totaltime ~ scale(mean.size) + (1|Fish_ID), data=prop.data)
+summary(mod.rel) ##because we scaled these factors, now the coefficient will show me the affect of increasing by one standard deviation in absolute or relative difference on the number of seconds spent with the larger male
+summary(mod.abs)
+summary(mod.mean)
+
+##Also create a null model; show that incorporating absolute or relative difference is in fact better than nothing at all
+mod.null<-lmer(HighMag.totaltime ~ 1 + (1|Fish_ID), data=prop.data)
+summary(mod.null)
+
+##Calculate delta AIC, relative likelihoods, and delta AIC relative to the best-fit model
+aic.scores<-AIC(mod.null,mod.rel, mod.abs, mod.mean)
+akaike.descriptors<-akaike.weights(aic.scores$AIC)
+deltaAIC<-round(akaike.descriptors$deltaAIC,2)
+likelihood<-round(akaike.descriptors$rel.LL,2)
+weights<-round(akaike.descriptors$weights,2)
+
+model.fit.summary<-data.frame(matrix(NA, nrow=4, ncol=4))
+model.fit.summary[,1]<-deltaAIC
+model.fit.summary[,2]<-likelihood
+model.fit.summary[,3]<-weights
+colnames(model.fit.summary)<-c("DeltaAIC", "Likelihood", "Weight")
+rownames(model.fit.summary)<-c("Null Model", "Relative Model", "Absolute Model", "Mean")
+model.fit.summary<-model.fit.summary[order(deltaAIC),]
+model.fit.summary
+
+```
+
+
+Plot model effects with total time spent with high magnitude stimulus: proportional and absolute models
+```{r}
+#make a “fit” variable in your dataset that’s the same as the response variable (y-axis) you want to plot
+prop.data$fit <- prop.data$HighMag.totaltime
+
+##Relative difference plot:
+ef.totalhighmag.rel <- (effect(term = "scale(rel.diff)", mod=mod.rel, xlevels=list(rel.diff=seq(0.1, 0.7, by=0.1))))
+ef.df.totalhighmag.rel <- as.data.frame(ef.totalhighmag.rel)
+
+a<-ggplot(data=ef.df.totalhighmag.rel, aes(x=rel.diff, y=fit))+
+  geom_line()+
+  geom_ribbon(aes(min = fit-se, max = fit+se), alpha = 0.3)+
+  geom_jitter(data=prop.data, aes(x=rel.diff, y=fit, fill=Comparison), position=position_jitter(0.006), alpha=0.5, shape=21, size=1.5)+
+  stat_summary(data=prop.data, fun = mean, geom = "point", size = 5, shape=23, aes(fill=Comparison))+
+  stat_summary(data=prop.data, fun.data=mean_se, geom="errorbar")+
+  labs(y= "Seconds", x = "Proportional Difference in Magnitude")+
+  theme_bw()+
+  ylim(c(0,350))+
+  xlim(c(0.1, 0.7))+
+  geom_label(label="(A) Time with Larger Male", x=0.35, y=350, label.size=NA)+
+  scale_fill_discrete(name="Stimulus Pair", labels=c("a|h", "b|h", "a|g", "c|h", "a|f", "e|h", "a|d", "f|h", "a|c", "g|h", "a|b"))
+
+###Absolute difference plot:
+ef.totalhighmag.abs <- (effect(term = "scale(abs.diff)", mod=mod.abs, xlevels=list(abs.diff=seq(100, 700, by=10))))
+ef.df.totalhighmag.abs <- as.data.frame(ef.totalhighmag.abs)
+
+b<-ggplot(data=ef.df.totalhighmag.abs, aes(x=abs.diff, y=fit))+
+  geom_line()+
+  geom_ribbon(aes(min = fit-se, max = fit+se), alpha = 0.3)+
+  geom_jitter(data=prop.data, aes(x=abs.diff, y=fit, col=Comparison), position=position_jitter(0.006), alpha=0.8)+
+ stat_summary(data=prop.data, fun = mean, geom = "point", size = 5, aes(shape=pair.identity, fill=Comparison), color="black")+
+  scale_shape_manual(values = c(21,22,23))+
+  stat_summary(data=prop.data, fun.data=mean_se, geom="errorbar")+
+  labs(y= "Seconds", x = "Absolute Magnitude Difference")+
+  theme_bw()+
+  guides(fill = guide_legend(override.aes=list(shape=21)))+
+  ylim(c(0,350))
+```
+
+
+2. Total time with low magnitude stimulus
+```{r}
+##Full, interaction model
+int.mod.totallowmagtime<-lmer(LowMag.totaltime ~ scale(abs.diff)*scale(rel.diff) + (1|Fish_ID), data=prop.data)
+summary(int.mod.totallowmagtime)
+
+resid.int.mod.totallowmagtime<-resid(int.mod.totallowmagtime)
+predict.int.mod.totallowmagtime<-predict(int.mod.totallowmagtime)
+par(mfrow=c(1,3))
+hist(resid.int.mod.totallowmagtime)
+plot(resid.int.mod.totallowmagtime~predict.int.mod.totallowmagtime)
+qqnorm(resid.int.mod.totallowmagtime)
+qqline(resid.int.mod.totallowmagtime)
+
+drop1(int.mod.totallowmagtime, scope=~., test="Chisq")##here, the interaction term IS significant
+
+##Again though, we need to account for the high correlation between absolute and relative difference
+mod.rel<-lmer(LowMag.totaltime ~ scale(rel.diff) + (1|Fish_ID), data=prop.data)
+mod.abs<-lmer(LowMag.totaltime ~ scale(abs.diff) + (1|Fish_ID), data=prop.data)
+mod.mean<-lmer(LowMag.totaltime ~ scale(mean.size) + (1|Fish_ID), data=prop.data)
+summary(mod.rel) ##because we scaled these factors, now the coefficient will show me the affect of increasing by one standard deviation in absolute or relative difference on the number of seconds spent with the larger male
+summary(mod.abs)
+summary(mod.mean)
+
+##Also create a completely null model; show that incorporating absolute or relative difference is in fact better than nothing at all
+mod.null<-lmer(LowMag.totaltime ~ 1 + (1|Fish_ID), data=prop.data)
+summary(mod.null)
+
+##Calculate delta AIC, relative likelihoods, and delta AIC relative to the best-fit model
+aic.scores<-AIC(mod.null,mod.rel, mod.abs, mod.mean)
+akaike.descriptors<-akaike.weights(aic.scores$AIC)
+deltaAIC<-round(akaike.descriptors$deltaAIC,2)
+likelihood<-round(akaike.descriptors$rel.LL,2)
+weights<-round(akaike.descriptors$weights,2)
+
+model.fit.summary<-data.frame(matrix(NA, nrow=4, ncol=3))
+model.fit.summary[,1]<-deltaAIC
+model.fit.summary[,2]<-likelihood
+model.fit.summary[,3]<-weights
+colnames(model.fit.summary)<-c("DeltaAIC", "Likelihood", "Weight")
+rownames(model.fit.summary)<-c("Null Model", "Relative Model", "Absolute Model", "Mean")
+model.fit.summary<-model.fit.summary[order(deltaAIC),]
+model.fit.summary
+```
+
+Plot Total Time with low magnitude stimulus with fitted model estimates: proportional and absolute models
+```{r}
+prop.data$fit <- prop.data$LowMag.totaltime
+
+##Relative difference plot:
+ef.totallowmag.rel <- (effect(term = "scale(rel.diff)", mod=mod.rel, xlevels=list(rel.diff=seq(0.1, 0.7, by=0.1))))
+ef.df.totallowmag.rel  <- as.data.frame(ef.totallowmag.rel )
+
+p<-ggplot(data=ef.df.totallowmag.rel, aes(x=rel.diff, y=fit))+
+  geom_line()+
+  geom_ribbon(aes(min = fit-se, max = fit+se), alpha = 0.3)+
+  geom_jitter(data=prop.data, aes(x=rel.diff, y=fit, fill=Comparison), position=position_jitter(0.006), alpha=0.5, shape=21, size=1.5)+
+ stat_summary(data=prop.data, fun = mean, geom = "point", size = 5, shape=23, aes(fill=Comparison), color="black")+
+  stat_summary(data=prop.data, fun.data=mean_se, geom="errorbar")+
+  labs(y= "Seconds", x = "Proportional Difference in Size")+
+  theme_bw()+
+  ylim(c(0,350))+
+  xlim(c(0.1, 0.7))+
+  geom_label(label="(B) Time with Smaller Male", x=0.37, y=350, label.size=NA)+
+  scale_fill_discrete(name="Stimulus Pair", labels=c("a|h", "b|h", "a|g", "c|h", "a|f", "e|h", "a|d", "f|h", "a|c", "g|h", "a|b"))
+
+###Absolute difference plot:
+ef1.abs <- (effect(term = "scale(abs.diff)", mod=mod.abs, xlevels=list(abs.diff=seq(100, 700, by=10))))
+ef.abs.data.1 <- as.data.frame(ef1.abs)
+
+d<-ggplot(data=ef.abs.data.1, aes(x=abs.diff, y=fit))+
+  geom_line()+
+  geom_ribbon(aes(min = fit-se, max = fit+se), alpha = 0.3)+
+  geom_jitter(data=prop.data, aes(x=abs.diff, y=fit, col=Comparison), position=position_jitter(0.006), alpha=0.8)+
+  stat_summary(data=prop.data, fun = mean, geom = "point", size = 5, aes(shape=pair.identity, fill=Comparison), color="black")+
+  scale_shape_manual(values = c(21,22,23))+
+  stat_summary(data=prop.data, fun.data=mean_se, geom="errorbar")+
+  labs(y= "Seconds", x = "Absolute Magnitude Difference")+
+  theme_bw()+
+  guides(fill = guide_legend(override.aes=list(shape=21)))+
+  ylim(c(0,350))
+```
+
+3. Preference for larger male (Total time with high magnitude - Total time with low magnitude)
+```{r}
+##Full interaction model:
+int.mod.total.time.diff<-lmer(total.time.diff ~ scale(abs.diff)*scale(rel.diff) + (1|Fish_ID), data=prop.data)
+summary(int.mod.total.time.diff)
+
+##Visually examine model diagnostic plots:
+resid.int.mod.total.time.diff<-resid(int.mod.total.time.diff)
+predict.int.mod.total.time.diff<-predict(int.mod.total.time.diff)
+par(mfrow=c(1,3))
+hist(resid.int.mod.total.time.diff)
+plot(resid.int.mod.total.time.diff~predict.int.mod.total.time.diff)
+qqnorm(resid.int.mod.total.time.diff)
+qqline(resid.int.mod.total.time.diff)
+
+drop1(int.mod.total.time.diff, scope=~., test="Chisq") ##Interaction term not significant, but both absolute and relative difference are. Some people would argue we should drop the interaction term and create additive model, so:
+
+add.mod.total.time.diff<-lmer(total.time.diff ~ scale(abs.diff)+scale(rel.diff) + (1|Fish_ID), data=prop.data)
+summary(add.mod.total.time.diff)
+
+resid.add.mod.total.time.diff<-resid(add.mod.total.time.diff)
+predict.add.mod.total.time.diff<-predict(add.mod.total.time.diff)
+par(mfrow=c(1,3))
+hist(resid.add.mod.total.time.diff)
+plot(resid.add.mod.total.time.diff~predict.add.mod.total.time.diff)
+qqnorm(resid.add.mod.total.time.diff)
+qqline(resid.add.mod.total.time.diff)
+
+drop1(add.mod.total.time.diff, test="Chisq") ##Relative difference, but not absolute difference, is a significant predictor of the difference in time spent with the low versus high magnitude male
+
+##Also build separate models for each:
+mod.rel<-lmer(total.time.diff ~ scale(rel.diff) + (1|Fish_ID), data=prop.data)
+mod.abs<-lmer(total.time.diff ~ scale(abs.diff) + (1|Fish_ID), data=prop.data)
+mod.mean<-lmer(total.time.diff ~ scale(mean.size) + (1|Fish_ID), data=prop.data)
+summary(mod.rel) ##because we scaled these factors, now the coefficient will show me the affect of increasing by one standard deviation in absolute or relative difference on the number of seconds spent with the larger male
+summary(mod.abs)
+summary(mod.mean)
+
+##Also create a completely null model; show that incorporating absolute or relative difference is in fact better than nothing at all
+mod.null<-lmer(total.time.diff ~ 1 + (1|Fish_ID), data=prop.data)
+
+##Calculate delta AIC, relative likelihoods, and delta AIC relative to the best-fit model
+aic.scores<-AIC(mod.null,mod.rel, mod.abs, mod.mean)
+akaike.descriptors<-akaike.weights(aic.scores$AIC)
+deltaAIC<-round(akaike.descriptors$deltaAIC,2)
+likelihood<-round(akaike.descriptors$rel.LL,2)
+weights<-round(akaike.descriptors$weights,2)
+
+model.fit.summary<-data.frame(matrix(NA, nrow=4, ncol=3))
+model.fit.summary[,1]<-deltaAIC
+model.fit.summary[,2]<-likelihood
+model.fit.summary[,3]<-weights
+colnames(model.fit.summary)<-c("DeltaAIC", "Likelihood", "Weight")
+rownames(model.fit.summary)<-c("Null Model", "Relative Model", "Absolute Model", "Mean Model")
+model.fit.summary<-model.fit.summary[order(deltaAIC),]
+model.fit.summary##Shows that the best fit model is the relative model again, by a lot
+
+```
+
+Repeat the above with comparison number included as an additional fixed effect, to test for whether the order in which stimuli were displayed affected preference:
+```{r}
+##Full interaction model:
+int.mod.total.time.diff<-lmer(total.time.diff ~ scale(abs.diff)*scale(rel.diff) + Comp_Num + (1|Fish_ID), data=prop.data)
+summary(int.mod.total.time.diff)
+
+##Visually examine model diagnostic plots:
+resid.int.mod.total.time.diff<-resid(int.mod.total.time.diff)
+predict.int.mod.total.time.diff<-predict(int.mod.total.time.diff)
+par(mfrow=c(1,3))
+hist(resid.int.mod.total.time.diff)
+plot(resid.int.mod.total.time.diff~predict.int.mod.total.time.diff)
+qqnorm(resid.int.mod.total.time.diff)
+qqline(resid.int.mod.total.time.diff)
+
+drop1(int.mod.total.time.diff, scope=~., test="Chisq") ##Interaction term not significant, but both absolute and relative difference are. Some people would argue we should drop the interaction term and create additive model, so:
+
+add.mod.total.time.diff<-lmer(total.time.diff ~ scale(abs.diff)+scale(rel.diff) + Comp_Num + (1|Fish_ID), data=prop.data)
+summary(add.mod.total.time.diff)
+
+resid.add.mod.total.time.diff<-resid(add.mod.total.time.diff)
+predict.add.mod.total.time.diff<-predict(add.mod.total.time.diff)
+par(mfrow=c(1,3))
+hist(resid.add.mod.total.time.diff)
+plot(resid.add.mod.total.time.diff~predict.add.mod.total.time.diff)
+qqnorm(resid.add.mod.total.time.diff)
+qqline(resid.add.mod.total.time.diff)
+
+drop1(add.mod.total.time.diff, test="Chisq") ##Relative difference, but not absolute difference, is a significant predictor of the difference in time spent with the low versus high magnitude male
+
+##Also build separate models for each:
+mod.rel<-lmer(total.time.diff ~ scale(rel.diff) + Comp_Num + (1|Fish_ID), data=prop.data)
+mod.abs<-lmer(total.time.diff ~ scale(abs.diff) + Comp_Num + (1|Fish_ID), data=prop.data)
+mod.mean<-lmer(total.time.diff ~ scale(mean.size) + Comp_Num + (1|Fish_ID), data=prop.data)
+summary(mod.rel) ##because we scaled these factors, now the coefficient will show me the affect of increasing by one standard deviation in absolute or relative difference on the number of seconds spent with the larger male
+summary(mod.abs)
+summary(mod.mean)
+
+##Also create a completely null model; show that incorporating absolute or relative difference is in fact better than nothing at all
+mod.null<-lmer(total.time.diff ~ 1 + (1|Fish_ID), data=prop.data)
+
+##Calculate delta AIC, relative likelihoods, and delta AIC relative to the best-fit model
+aic.scores<-AIC(mod.null,mod.rel, mod.abs, mod.mean)
+akaike.descriptors<-akaike.weights(aic.scores$AIC)
+deltaAIC<-round(akaike.descriptors$deltaAIC,2)
+likelihood<-round(akaike.descriptors$rel.LL,2)
+weights<-round(akaike.descriptors$weights,2)
+
+model.fit.summary<-data.frame(matrix(NA, nrow=4, ncol=3))
+model.fit.summary[,1]<-deltaAIC
+model.fit.summary[,2]<-likelihood
+model.fit.summary[,3]<-weights
+colnames(model.fit.summary)<-c("DeltaAIC", "Likelihood", "Weight")
+rownames(model.fit.summary)<-c("Null Model", "Relative Model", "Absolute Model", "Mean Model")
+model.fit.summary<-model.fit.summary[order(deltaAIC),]
+model.fit.summary##Shows that the best fit model is the relative model again, by a lot
+
+```
+
+Plot TOTAL difference in time with fitted model estimates: proportional and absolute models
+```{r, warn=FALSE}
+prop.data$fit <- prop.data$total.time.diff
+
+##Relative difference plot:
+ef.totaltimediff.rel <- (effect(term = "scale(rel.diff)", mod=mod.rel, xlevels=list(rel.diff=seq(0.1, 0.7, by=0.1))))
+ef.df.totaltimediff.rel <- as.data.frame(ef.totaltimediff.rel)
+
+e<-ggplot(data=ef.df.totaltimediff.rel, aes(x=rel.diff, y=fit))+
+  geom_line()+
+  geom_ribbon(aes(min = fit-se, max = fit+se), alpha = 0.3)+
+  geom_jitter(data=prop.data, aes(x=rel.diff, y=fit, col=Comparison), position=position_jitter(0.006), alpha=0.8)+
+ stat_summary(data=prop.data, fun = mean, geom = "point", size = 5, shape=21, aes(fill=Comparison), color="black")+
+  scale_shape_manual(values = c(21,22,23))+
+  stat_summary(data=prop.data, fun.data=mean_se, geom="errorbar")+
+  labs(y= "Seconds", x = "Proportional Magnitude Difference")+
+  theme_bw()+
+  theme(legend.position="none")+
+  ylim(c(-250,350))+
+  xlim(c(0.1, 0.7))+
+  geom_label(label="(A) Preference", x=0.23, y=350, label.size=NA)
+
+###Absolute difference plot:
+ef.totaltimediff.abs <- (effect(term = "scale(abs.diff)", mod=mod.abs, xlevels=list(abs.diff=seq(100, 700, by=10))))
+ef.df.totaltimediff.abs <- as.data.frame(ef.totaltimediff.abs)
+
+f<-ggplot(data=ef.df.totaltimediff.abs, aes(x=abs.diff, y=fit))+
+  geom_line()+
+  geom_ribbon(aes(min = fit-se, max = fit+se), alpha = 0.3)+
+  geom_jitter(data=prop.data, aes(x=abs.diff, y=fit, col=Comparison), position=position_jitter(0.1), alpha=0.8)+
+  stat_summary(data=prop.data, fun = mean, geom = "point", size = 5, aes(shape=pair.identity, fill=Comparison), color="black")+
+  scale_shape_manual(values = c(21,22,23))+
+    stat_summary(data=prop.data, fun.data=mean_se, geom="errorbar")+
+  labs(y= "Time with large - Time with small", x = "Absolute Magnitude Difference")+
+  theme_bw()+
+  guides(fill = guide_legend(override.aes=list(shape=21)))+
+  ylim(c(-250, 350))
+
+```
+
+
+##FIGURE 2
+```{r}
+prop.data$fit <- prop.data$total.time.diff
+ef.totaltimediff.rel <- (effect(term = "scale(rel.diff)", mod=mod.rel, xlevels=list(rel.diff=seq(0.1, 0.7, by=0.1))))
+ef.df.totaltimediff.rel <- as.data.frame(ef.totaltimediff.rel)
+
+png(file="Figure_2.png", width=4, height=6, units="in", res=600)
+ggplot(data=ef.df.totaltimediff.rel, aes(x=rel.diff, y=fit))+
+  geom_line()+
+  geom_ribbon(aes(min = fit-se, max = fit+se), alpha = 0.3)+
+  geom_jitter(data=prop.data, aes(x=rel.diff, y=fit, fill=Comparison), shape=21, size=1.5, position=position_jitter(0.004), alpha=0.5)+
+ stat_summary(data=prop.data, fun = mean, geom = "point", size = 5, shape=23, aes(fill=Comparison), color="black")+
+  stat_summary(data=prop.data, fun.data=mean_se, geom="errorbar")+
+  labs(y= "Preference (Time with Larger - Time with Smaller)", x = "Proportional Difference in Body Size")+
+  theme_bw()+
+  ylim(c(-225,325))+
+  xlim(c(0.1, 0.7))+
+  scale_fill_discrete(name="Stimulus Pair", labels=c("a|h", "b|h", "a|g", "c|h", "a|f", "e|h", "a|d", "f|h", "a|c", "g|h", "a|b"))
+dev.off()
+```
+
+Figure S1
+```{r}
+png(file="Figure_S1.png", width=4, height=7, units="in", res=600)
+ggarrange(a + rremove("xlab")+
+               theme(axis.ticks.y = element_blank(),
+                     plot.margin = margin(r = 1) ), 
+          c + theme(axis.ticks.y = element_blank(),
+                     plot.margin = margin(r = 1) ), 
+          nrow = 2, ncol=1, common.legend=TRUE, legend="right")
+dev.off()
+```
+
+
+Statistical analyses regarding pairs of stimuli where absolute difference is held constant but proportional difference varies:
+1. Calculate average difference in preference
+```{r}
+pref.summary<-prop.data%>%dplyr::group_by(Comparison, pair.identity)%>%dplyr::summarise(mean=mean(total.time.diff), stdev=sd(total.time.diff))
+as.data.frame(pref.summary)
+pref.summary$pair.num<-c(0,1,1,2,2,3,3,4,4,5,5)
+summary<-pref.summary%>%arrange(pair.num, desc(pair.identity))%>%dplyr::group_by(pair.num)%>%dplyr::summarize(difference = first(mean)-last(mean))
+summary<-as.data.frame(summary[2:6,])##drop the zero because we dont want to compare the entry that had no comparison
+
+summary%>%dplyr::summarise(min=min(difference), max=max(difference), average=mean(difference), sd=sd(difference))
+```
+
+2. Statistical analyses: does preference for the larger male differ significantly between the high- and low-magnitude pair?
+(Note that for the paired tests used here, we can only use paired samples; if any fish did not participate in one of the comparisons, they are deleted)
+```{r}
+##85v70 and 120v110
+abs.diff.1<-prop.data%>%filter(Comparison=="85v70"|Comparison=="120v110")%>%filter(!Fish_ID=="OrangeBlue", !Fish_ID=="OrangePink", !Fish_ID=="RedGreenGreen")
+##Need to check that the difference between the pairs follows a normal distribution, since the sample size is <30
+d<-as.data.frame(abs.diff.1%>%dplyr::group_by(Fish_ID)%>%dplyr::summarize(difference = first(total.time.diff)-last(total.time.diff)))
+shapiro.test(d$difference)##data not normally distributed: use paired Wilcoxon two-samples test
+res<-wilcox.test(total.time.diff~Comparison, data=abs.diff.1, paired=TRUE)
+res##Significant difference between 85v70 aand 120v110
+
+##92v70 and 120v104
+abs.diff.2<-prop.data%>%filter(Comparison=="92v70"|Comparison=="120v104")%>%filter(!Fish_ID=="Pink",!Fish_ID=="GreenRed")
+##Need to check that the difference between the pairs follows a normal distribution, since the sample size is <30
+d<-as.data.frame(abs.diff.2%>%dplyr::group_by(Fish_ID)%>%dplyr::summarize(difference = first(total.time.diff)-last(total.time.diff)))
+shapiro.test(d$difference)##data normally distributed: use paired two-sample t-test
+res<-t.test(total.time.diff~Comparison, data=abs.diff.2, paired=TRUE)
+res##Significant difference between 92v70 and 120v104
+
+
+##97v70 and 120v100
+abs.diff.3<-prop.data%>%filter(Comparison=="97v70"|Comparison=="120v100")%>%filter(!Fish_ID=="Orange", !Fish_ID=="OrangeBlue", !Fish_ID=="PinkPink")
+##Need to check that the difference between the pairs follows a normal distribution, since the sample size is <30
+d<-as.data.frame(abs.diff.3%>%dplyr::group_by(Fish_ID)%>%dplyr::summarize(difference = first(total.time.diff)-last(total.time.diff)))
+shapiro.test(d$difference)##data normally distributed: use paired two-sample t-test
+res<-t.test(total.time.diff~Comparison, data=abs.diff.3, paired=TRUE)
+res##Significant difference between 97v70 and 120v100
+
+
+##104v70 and 120v92
+abs.diff.4<-prop.data%>%filter(Comparison=="104v70"|Comparison=="120v92")
+##Need to check that the difference between the pairs follows a normal distribution, since the sample size is <30
+d<-as.data.frame(abs.diff.4%>%dplyr::group_by(Fish_ID)%>%dplyr::summarize(difference = first(total.time.diff)-last(total.time.diff)))
+shapiro.test(d$difference)##data normally distributed: use paired two-sample t-test
+res<-t.test(total.time.diff~Comparison, data=abs.diff.4, paired=TRUE)
+res##Significant difference between 104v70 and 120v92
+
+
+
+##110v70 and 120v85
+abs.diff.5<-prop.data%>%filter(Comparison=="110v70"|Comparison=="120v85")
+
+##Need to check that the difference between the pairs follows a normal distribution, since the sample size is <30
+d<-as.data.frame(abs.diff.5%>%dplyr::group_by(Fish_ID)%>%dplyr::summarize(difference = first(total.time.diff)-last(total.time.diff)))
+shapiro.test(d$difference)##data normally distributed: use paired two-sample t-test
+res<-t.test(total.time.diff~Comparison, data=abs.diff.5, paired=TRUE)
+res##NO Significant difference between 110v70 and 120v85
+```
+
+FIGURE 3
+```{r}
+figuredata<-rbind(abs.diff.1, abs.diff.2, abs.diff.3, abs.diff.4, abs.diff.5)
+figuredata<-figuredata%>%dplyr::select(Fish_ID, Comparison,abs.diff,pair.identity, total.time.diff)
+figuredata$Proportional.Difference<-"Larger"
+figuredata$Proportional.Difference[figuredata$pair.identity=="high"]<-"Smaller"
+names(figuredata)<-c("Comp_Num", "Fish ID", "Comparison", "abs.diff", "pair.identity", "total.time.diff", "Proportional.Difference")
+
+
+png(file="Figure_3.png", width=6, height=5, units="in", res=600)
+ggplot(data=figuredata, aes(x=abs.diff, y=total.time.diff))+
+  geom_jitter(data=figuredata, aes(x=abs.diff, y=total.time.diff, fill=Comparison),shape=21, size=1.5, position=position_jitter(0.004), alpha=0.5)+
+  guides(fill = guide_legend(override.aes=list(shape=c(22, 23, 22, 23, 22, 23, 22, 23, 22, 23))))+
+  stat_summary(data=figuredata, fun = mean, geom = "point", size = 5, aes(shape=Proportional.Difference, fill=Comparison), color="black")+
+  scale_shape_manual(values = c(22,23))+
+    stat_summary(data=figuredata, fun.data=mean_se, geom="errorbar")+
+  labs(y= "Preference (Time with large - Time with small)", x = "Absolute Difference in Body Size")+
+  theme_bw()+
+  ylim(c(-250, 350))+
+geom_label(label="**", x=170, y=325, size=6,label.size=NA)+
+geom_label(label="*", x=260, y=325, size=6,label.size=NA)+
+geom_label(label="*", x=330, y=325, size=6,label.size=NA)+
+geom_label(label="*", x=430, y=325, size=6,label.size=NA)+
+  labs(shape="Proportional Difference", colour="Comparison")+
+  scale_fill_discrete(name="Stimulus Pair", labels=c("b|h", "a|g", "c|h", "a|f", "e|h", "a|d", "f|h", "a|c", "g|h", "a|b"))
+dev.off()
+
+```
+
+
+Testing for the 'near miss' and 'opposite miss' to Weber's Law
+```{r}
+##To start, we need to turn stimulus magnitude into not a factor
+prop.data$HighMagStim.num<-as.numeric(levels(prop.data$HighMagStim))[prop.data$HighMagStim]
+prop.data$LowMagStim.num<-as.numeric(levels(prop.data$LowMagStim))[prop.data$LowMagStim]
+##First, the base model will be: Response ~ abs(a-b)/b^k, where a is the size of male 1, b is the size of male 2
+
+##Add a column to prop.data that is "x" for when the high magnitude male is the denominator
+prop.data$x.neg1.high<-abs(prop.data$HighMagStim.num-prop.data$LowMagStim.num)/prop.data$HighMagStim.num^(-1)
+prop.data$x.neg0.5.high<-abs(prop.data$HighMagStim.num-prop.data$LowMagStim.num)/prop.data$HighMagStim.num^(-0.5)
+prop.data$x.0.high<-abs(prop.data$HighMagStim.num-prop.data$LowMagStim.num)/prop.data$HighMagStim.num^(0)
+prop.data$x.0.5.high<-abs(prop.data$HighMagStim.num-prop.data$LowMagStim.num)/prop.data$HighMagStim.num^(0.5)
+prop.data$x.1.high<-abs(prop.data$HighMagStim.num-prop.data$LowMagStim.num)/prop.data$HighMagStim.num^(1)
+prop.data$x.1.5.high<-abs(prop.data$HighMagStim.num-prop.data$LowMagStim.num)/prop.data$HighMagStim.num^(1.5)
+prop.data$x.2.high<-abs(prop.data$HighMagStim.num-prop.data$LowMagStim.num)/prop.data$HighMagStim.num^(2)
+prop.data$x.2.5.high<-abs(prop.data$HighMagStim.num-prop.data$LowMagStim.num)/prop.data$HighMagStim.num^(2.5)
+prop.data$x.3.high<-abs(prop.data$HighMagStim.num-prop.data$LowMagStim.num)/prop.data$HighMagStim.num^(3)
+prop.data$x.3.5.high<-abs(prop.data$HighMagStim.num-prop.data$LowMagStim.num)/prop.data$HighMagStim.num^(3.5)
+prop.data$x.4.high<-abs(prop.data$HighMagStim.num-prop.data$LowMagStim.num)/prop.data$HighMagStim.num^(4)
+
+
+##k=-1:
+k.mod.neg1.high<-lmer(total.time.diff ~ scale(x.neg1.high) + (1|Fish_ID), data=prop.data)
+summary(k.mod.neg1.high)
+AIC(k.mod.neg1.high)
+
+##k=-0.5:
+k.mod.neg0.5.high<-lmer(total.time.diff ~ scale(x.neg0.5.high) + (1|Fish_ID), data=prop.data)
+summary(k.mod.neg0.5.high)
+AIC(k.mod.neg0.5.high)
+
+##k=0:
+k.mod.0.high<-lmer(total.time.diff ~ scale(x.0.high) + (1|Fish_ID), data=prop.data)
+summary(k.mod.0.high)
+AIC(k.mod.0.high)
+
+##k=0.5:
+k.mod.0.5.high<-lmer(total.time.diff ~ scale(x.0.5.high) + (1|Fish_ID), data=prop.data)
+summary(k.mod.0.5.high)
+AIC(k.mod.0.5.high)
+
+##k=1:
+k.mod.1.high<-lmer(total.time.diff ~ scale(x.1.high) + (1|Fish_ID), data=prop.data)
+summary(k.mod.1.high)
+AIC(k.mod.1.high)
+
+##k=1.5:
+k.mod.1.5.high<-lmer(total.time.diff ~ scale(x.1.5.high) + (1|Fish_ID), data=prop.data)
+summary(k.mod.1.5.high)
+AIC(k.mod.1.5.high)
+
+##k=2:
+k.mod.2.high<-lmer(total.time.diff ~ scale(x.2.high) + (1|Fish_ID), data=prop.data)
+summary(k.mod.2.high)
+AIC(k.mod.2.high)
+
+##k=2.5:
+k.mod.2.5.high<-lmer(total.time.diff ~ scale(x.2.5.high) + (1|Fish_ID), data=prop.data)
+summary(k.mod.2.5.high)
+AIC(k.mod.2.5.high)
+
+##k=3:
+k.mod.3.high<-lmer(total.time.diff ~ scale(x.3.high) + (1|Fish_ID), data=prop.data)
+summary(k.mod.3.high)
+AIC(k.mod.3.high)
+
+##k=3.5:
+k.mod.3.5.high<-lmer(total.time.diff ~ scale(x.3.5.high) + (1|Fish_ID), data=prop.data)
+summary(k.mod.3.5.high)
+AIC(k.mod.3.5.high)
+
+##k=4:
+k.mod.4.high<-lmer(total.time.diff ~ scale(x.4.high) + (1|Fish_ID), data=prop.data)
+summary(k.mod.4.high)
+AIC(k.mod.4.high)
+
+
+df<-data.frame()
+df[1:11,1]<-c(-1, -0.5, 0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4)
+df[1:11,2]<-c(AIC(k.mod.neg1.high), AIC(k.mod.neg0.5.high), AIC(k.mod.0.high), AIC(k.mod.0.5.high), AIC(k.mod.1.high), AIC(k.mod.1.5.high), AIC(k.mod.2.high),AIC(k.mod.2.5.high), AIC(k.mod.3.high), AIC(k.mod.3.5.high), AIC(k.mod.4.high))
+names(df)<-c("k", "AIC.high")
+df
+```
+Figure S2
+```{r}
+png(file="Figure_S2.png", width=5, height=4, units="in", res=600)
+ggplot(data=df, aes(x=k, y=AIC.high))+
+  geom_point()+
+  theme_bw()+
+  ylab("AIC Value")
+dev.off()
+```
