@@ -1,0 +1,5 @@
+"variance_component","sigma2","n_levels","LRT","pval"
+"reference",0.1228,31,227.9,0
+"phylogeny",2.332e-09,26,0,1
+"species",0.7918,26,14.57,0
+"residual",25.67,34,NA,NA
