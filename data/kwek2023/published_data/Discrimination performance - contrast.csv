@@ -1,8 +1,0 @@
-Type,Trials,Lowcontchoice,Highcontchoice,Prop,
-1vs2,15,8,7,53.33333333,Prefer redder
-1vs3,20,15,5,75,Prefer redder
-1vs4,20,15,5,75,Prefer redder
-1vs5,15,6,9,40,Cannot decide
-2vs4,19,14,5,73.68421053,Prefer redder
-2vs5,15,12,3,80,Prefer more blue
-3vs5,16,12,4,75,Prefer more blue
